@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-07-03
+
+### Changed
+
+- Refreshed the README marketplace-installation section to match current omp behavior: `.omp-plugin/marketplace.json` is now the preferred catalog path, `.claude-plugin/marketplace.json` remains a fallback, `/marketplace` / `/marketplace discover` / `/marketplace install <name@marketplace>` are the in-app discovery flow, and typed marketplace `npm` sources remain unsupported even though direct npm install of this package works.
+- Synced `src/shims/model-roles.{ts,d.ts}` to the current upstream role surface by adding `tiny` and `advisor` and including `RoleInfo.hidden?: boolean`.
+
+### Fixed
+
+- Extended `bun run check:omp-head` to compare `src/shims/model-roles.{ts,d.ts}` against upstream `packages/coding-agent/src/config/model-roles.ts` before the normal omp-HEAD typecheck, so additive upstream role drift in the local shim now fails the drift check instead of staying silently green.
 ## [0.2.2] - 2026-07-03
 
 ### Added
