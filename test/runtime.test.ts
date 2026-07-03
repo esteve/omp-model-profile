@@ -19,12 +19,13 @@ interface Harness {
 interface HarnessOptions {
 	hasUI?: boolean;
 	supportSegment?: boolean;
+	withCanonicalResolver?: boolean;
 }
 
 /** Minimal fakes exercising the override + model + thinking path of applyProfile. */
 function makeHarness(
 	available: readonly ProfileModel[] = [opus],
-	{ hasUI = false, supportSegment = true }: HarnessOptions = {},
+	{ hasUI = false, supportSegment = true, withCanonicalResolver = true }: HarnessOptions = {},
 ): Harness {
 	const overrides: Record<string, string> = {};
 	const thinkingCalls: string[] = [];
@@ -64,13 +65,16 @@ function makeHarness(
 		};
 	}
 
+	const ctxModelRegistry: Record<string, unknown> = {
+		getAvailable: () => available,
+	};
+	if (withCanonicalResolver) {
+		ctxModelRegistry.resolveCanonicalModel = () => undefined;
+	}
 	const ctx = {
 		hasUI,
 		ui,
-		modelRegistry: {
-			getAvailable: () => available,
-			resolveCanonicalModel: () => undefined,
-		},
+		modelRegistry: ctxModelRegistry,
 	} as unknown as ExtensionContext;
 
 	return { pi, ctx, thinkingCalls, modelCalls, segmentCalls, statusCalls };
@@ -98,6 +102,12 @@ describe("applyProfile thinking application", () => {
 		const h = makeHarness();
 		await applyProfile(h.pi, h.ctx, "p", profile("anthropic/claude-opus-4-5"));
 		expect(h.thinkingCalls).toEqual([]);
+		expect(h.modelCalls).toEqual([opus]);
+	});
+
+	test("resolves a bare default id even when the host lacks resolveCanonicalModel", async () => {
+		const h = makeHarness([opus], { withCanonicalResolver: false });
+		await applyProfile(h.pi, h.ctx, "p", profile("claude-opus-4-5"));
 		expect(h.modelCalls).toEqual([opus]);
 	});
 });

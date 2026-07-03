@@ -7,7 +7,7 @@
  */
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { getRoleInfo, MODEL_ROLE_IDS } from "@oh-my-pi/pi-coding-agent/config/model-roles";
-import { type ProfileModel, resolveModelString } from "./apply";
+import { type ProfileModel, resolveCanonicalFromRegistry, resolveCompatibleModelString } from "./apply";
 import { type GenerateSpec, generateProfile } from "./generate";
 import { applyProfile, clearProfile } from "./runtime";
 import type { ProfileStore } from "./store";
@@ -65,9 +65,8 @@ function modelLabel(model: ProfileModel): string {
 
 function isModelAvailable(ctx: ExtensionContext, value: string, available: readonly ProfileModel[]): boolean {
 	return (
-		resolveModelString(value, available, id =>
-			ctx.modelRegistry.resolveCanonicalModel(id, { availableOnly: true }),
-		) !== undefined
+		resolveCompatibleModelString(value, available, id => resolveCanonicalFromRegistry(ctx.modelRegistry, id)) !==
+		undefined
 	);
 }
 
@@ -506,7 +505,10 @@ async function verbGenerate(
 		roleIds,
 		roleDescriptions,
 		available,
-		resolveCanonical: id => ctx.modelRegistry.resolveCanonicalModel(id, { availableOnly: true }),
+		resolveCanonical: id =>
+			resolveCompatibleModelString(id, available, canonicalId =>
+				resolveCanonicalFromRegistry(ctx.modelRegistry, canonicalId),
+			),
 		thinkingLevels: THINKING_OPTIONS,
 	};
 

@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { mapProfileToOverrides, resolveModelString, splitThinkingSuffix, stripThinkingSuffix } from "../src/apply";
+import {
+	mapProfileToOverrides,
+	resolveCompatibleModelString,
+	resolveModelString,
+	splitThinkingSuffix,
+	stripThinkingSuffix,
+} from "../src/apply";
 import { testModel } from "./fixtures";
 
 const sonnet = testModel("anthropic", "claude-sonnet-4-5");
@@ -62,6 +68,19 @@ describe("resolveModelString", () => {
 
 	test("returns undefined for unknown models", () => {
 		expect(resolveModelString("unknown/model", [sonnet])).toBeUndefined();
+	});
+});
+
+describe("resolveCompatibleModelString", () => {
+	test("falls back to an available id match when the host lacks canonical resolution", () => {
+		expect(resolveCompatibleModelString("claude-opus-4-5", [sonnet, opus])).toBe(opus);
+		expect(resolveCompatibleModelString("custom/claude-opus-4-5:medium", [sonnet, opus])).toBe(opus);
+	});
+
+	test("prefers the canonical resolver when the available list has no id match", () => {
+		expect(
+			resolveCompatibleModelString("gpt-5-codex", [sonnet], id => (id === "gpt-5-codex" ? codex : undefined)),
+		).toBe(codex);
 	});
 });
 

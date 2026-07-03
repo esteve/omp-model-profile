@@ -2,9 +2,19 @@
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-07-03
+
 ### Added
 
-- Extended `.github/workflows/omp-drift.yml` with a `file-agent-task` job: when the weekly omp-HEAD typecheck fails, it captures the tsgo diagnostics, files (or reuses, deduplicated by title search) a tracking issue with them embedded, and — if a `COPILOT_ASSIGN_PAT` repository secret is configured and Copilot cloud agent is enabled — assigns the issue to the Copilot coding agent (`copilot-swe-agent[bot]`) via a separate GraphQL `addAssigneesToAssignable` call (REST issue-creation with `assignees`/`agent_assignment` in the same request silently no-ops the assignment — confirmed empirically — so the issue is created plainly first, then assignment is attempted as a distinct, best-effort step). Falls back to a plain unassigned issue (via the default `GITHUB_TOKEN`) when no PAT is configured or assignment otherwise fails — e.g. a fine-grained PAT was empirically confirmed to 403 on this preview feature via both REST and GraphQL as of 2026-06-28, while an OAuth-based token succeeded; GitHub's docs say a classic PAT (`repo` scope) should also work, untested here — so drift is never silently lost regardless.
+- Extended `.github/workflows/omp-drift.yml` with a `file-agent-task` job: when the daily omp-HEAD typecheck fails, it captures the tsgo diagnostics, files (or reuses, deduplicated by title search) a tracking issue with them embedded, and — if a `COPILOT_ASSIGN_PAT` repository secret is configured and Copilot cloud agent is enabled — assigns the issue to the Copilot coding agent (`copilot-swe-agent[bot]`) via a separate GraphQL `addAssigneesToAssignable` call (REST issue-creation with `assignees`/`agent_assignment` in the same request silently no-ops the assignment — confirmed empirically — so the issue is created plainly first, then assignment is attempted as a distinct, best-effort step). Falls back to a plain unassigned issue (via the default `GITHUB_TOKEN`) when no PAT is configured or assignment fails.
+
+### Changed
+
+- `.github/workflows/omp-drift.yml` now runs daily at 06:00 UTC (and still supports `workflow_dispatch`) instead of weekly on Mondays.
+
+### Fixed
+
+- Treated `ctx.modelRegistry.resolveCanonicalModel()` as an optional host capability instead of assuming it always exists. AI profile generation, availability checks, and live profile application now fall back to the available-model list on hosts that expose `modelRegistry` without that method, instead of throwing `resolveCanonicalModel is not a function`.
 
 ## [0.2.1] - 2026-06-28
 

@@ -9,7 +9,13 @@
  *   alone do not.
  */
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { mapProfileToOverrides, resolveModelString, splitThinkingSuffix, toConfiguredThinkingLevel } from "./apply";
+import {
+	mapProfileToOverrides,
+	resolveCanonicalFromRegistry,
+	resolveCompatibleModelString,
+	splitThinkingSuffix,
+	toConfiguredThinkingLevel,
+} from "./apply";
 import type { ModelProfile } from "./types";
 
 const STATUS_KEY = "model-profile";
@@ -42,8 +48,8 @@ function clearOverrides(pi: ExtensionAPI): void {
 
 /** Resolve a role pattern to a live, available model (canonical fallback). */
 function resolveLiveModel(ctx: ExtensionContext, pattern: string) {
-	return resolveModelString(pattern, ctx.modelRegistry.getAvailable(), id =>
-		ctx.modelRegistry.resolveCanonicalModel(id, { availableOnly: true }),
+	return resolveCompatibleModelString(pattern, ctx.modelRegistry.getAvailable(), id =>
+		resolveCanonicalFromRegistry(ctx.modelRegistry, id),
 	);
 }
 

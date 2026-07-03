@@ -105,6 +105,44 @@ export function resolveModelString(
 	return resolveCanonical?.(base);
 }
 
+/**
+ * Host-compatible wrapper around {@link resolveModelString}.
+ *
+ * Older hosts expose `modelRegistry.getAvailable()` but not
+ * `resolveCanonicalModel()`. In that case, fall back to a plain id match within
+ * the available list rather than throwing.
+ */
+export function resolveCompatibleModelString(
+	value: string,
+	available: readonly ProfileModel[],
+	resolveCanonical?: (canonicalId: string) => ProfileModel | undefined,
+): ProfileModel | undefined {
+	return resolveModelString(
+		value,
+		available,
+		canonicalId => resolveCanonical?.(canonicalId) ?? available.find(model => model.id === canonicalId),
+	);
+}
+
+interface CanonicalResolverLike {
+	resolveCanonicalModel: (canonicalId: string, options?: { availableOnly?: boolean }) => ProfileModel | undefined;
+}
+
+function hasCanonicalResolver(registry: unknown): registry is CanonicalResolverLike {
+	return (
+		!!registry &&
+		typeof registry === "object" &&
+		"resolveCanonicalModel" in registry &&
+		typeof registry.resolveCanonicalModel === "function"
+	);
+}
+
+/** Safely call an optional host canonical resolver when the runtime exposes it. */
+export function resolveCanonicalFromRegistry(registry: unknown, canonicalId: string): ProfileModel | undefined {
+	if (!hasCanonicalResolver(registry)) return undefined;
+	return registry.resolveCanonicalModel(canonicalId, { availableOnly: true });
+}
+
 /** Project a profile onto the override payloads, dropping empty fields. */
 export function mapProfileToOverrides(profile: ModelProfile): ProfileOverrides {
 	const modelRoles: Record<string, string> = {};
