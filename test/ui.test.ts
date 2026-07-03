@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { getRoleInfo, MODEL_ROLE_IDS } from "../src/shims/model-roles";
 import { pickModel, slugifyName } from "../src/ui";
 import { testModel } from "./fixtures";
 
@@ -127,5 +128,25 @@ describe("slugifyName", () => {
 		expect(slugifyName("")).toBeUndefined();
 		expect(slugifyName(undefined)).toBeUndefined();
 		expect(slugifyName("###")).toBeUndefined();
+	});
+});
+
+describe("model role shim parity", () => {
+	test("includes current upstream built-in roles", () => {
+		expect(MODEL_ROLE_IDS).toEqual([
+			"default",
+			"smol",
+			"slow",
+			"vision",
+			"plan",
+			"designer",
+			"commit",
+			"tiny",
+			"task",
+			"advisor",
+		]);
+		const settings = { get: () => ({}) };
+		expect(getRoleInfo("tiny", settings).name).toBe("Tiny");
+		expect(getRoleInfo("advisor", settings).name).toBe("Advisor");
 	});
 });

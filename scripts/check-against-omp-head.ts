@@ -8,19 +8,24 @@
  *     into a temp dir.
  *  2. `bun install` the clone (frozen lockfile first, falling back to a plain
  *     install on lockfile drift).
- *  3. Emit `.d.ts` declarations for every host package that ships a
+ *  3. Compare the local `src/shims/model-roles.{ts,d.ts}` surface against the
+ *     cloned upstream `packages/coding-agent/src/config/model-roles.ts`:
+ *     built-in role IDs must match, and `RoleInfo.hidden?: boolean` must stay
+ *     in sync. This catches local shim/value drift even when the plugin still
+ *     typechecks against the real host exports.
+ *  4. Emit `.d.ts` declarations for every host package that ships a
  *     `tsconfig.publish.json` (`emitDeclarationOnly`, `noCheck: true` — fast,
  *     never fails on internal type errors).
- *  4. Rewrite each built package's `package.json` so its `types` /
+ *  5. Rewrite each built package's `package.json` so its `types` /
  *     `exports[*].types` entries point at the emitted `dist/types/**` instead
  *     of `src/**.tsx?`, matching what `bun publish` would ship.
- *  5. Swap the two packages this plugin imports directly
+ *  6. Swap the two packages this plugin imports directly
  *     (`@oh-my-pi/pi-coding-agent`, `@oh-my-pi/pi-ai`) in this repo's
  *     `node_modules` for symlinks into the rewritten clone packages.
- *  6. Typecheck against a temp tsconfig that clears `paths` (so the
+ *  7. Typecheck against a temp tsconfig that clears `paths` (so the
  *     `config/model-roles` subpath resolves through the swapped package's
  *     real export, not the local shim).
- *  7. Restore the original `node_modules` entries and delete all temp files,
+ *  8. Restore the original `node_modules` entries and delete all temp files,
  *     in a `finally` so a typecheck failure still leaves the tree pristine.
  *
  * Override the clone source for an offline run or to pin a known-good ref:
@@ -95,6 +100,81 @@ async function exists(p: string): Promise<boolean> {
 	}
 }
 
+function extractQuotedList(source: string, anchor: RegExp, label: string): string[] {
+	const match = source.match(anchor);
+	if (!match?.[1]) throw new Error(`Could not locate ${label}.`);
+	return [...match[1].matchAll(/"([^"]+)"/g)].map(([, value]) => value);
+}
+
+function hasHiddenFlag(source: string): boolean {
+	const match = source.match(/export interface (?:ModelRoleInfo|RoleInfo)\s*{([\s\S]*?)\n}/);
+	if (!match?.[1]) throw new Error("Could not locate RoleInfo interface.");
+	return /\bhidden\?:\s*boolean\b/.test(match[1]);
+}
+
+function diffList(actual: readonly string[], expected: readonly string[]): string {
+	const missing = expected.filter(value => !actual.includes(value));
+	const extra = actual.filter(value => !expected.includes(value));
+	const problems: string[] = [];
+	if (missing.length > 0) problems.push(`missing [${missing.join(", ")}]`);
+	if (extra.length > 0) problems.push(`extra [${extra.join(", ")}]`);
+	return problems.join("; ");
+}
+
+async function assertModelRoleShimParity(tmp: string): Promise<void> {
+	const upstreamPath = path.join(tmp, "packages", "coding-agent", "src", "config", "model-roles.ts");
+	const shimTsPath = path.join(repoRoot, "src", "shims", "model-roles.ts");
+	const shimDtsPath = path.join(repoRoot, "src", "shims", "model-roles.d.ts");
+
+	const [upstream, shimTs, shimDts] = await Promise.all([
+		fs.readFile(upstreamPath, "utf8"),
+		fs.readFile(shimTsPath, "utf8"),
+		fs.readFile(shimDtsPath, "utf8"),
+	]);
+
+	const upstreamRoles = extractQuotedList(
+		upstream,
+		/export const MODEL_ROLE_IDS:[^{=\n]*=\s*\[([\s\S]*?)\];/,
+		"upstream MODEL_ROLE_IDS",
+	);
+	const shimTsRoles = extractQuotedList(
+		shimTs,
+		/export const MODEL_ROLE_IDS:[^{=\n]*=\s*\[([\s\S]*?)\];/,
+		"shim MODEL_ROLE_IDS",
+	);
+	const shimTsUnion = extractQuotedList(shimTs, /export type ModelRole\s*=([\s\S]*?);/, "shim ModelRole union");
+	const shimDtsUnion = extractQuotedList(shimDts, /type ModelRole\s*=([\s\S]*?);/, "shim .d.ts ModelRole union");
+
+	const problems: string[] = [];
+	if (JSON.stringify(shimTsRoles) !== JSON.stringify(upstreamRoles)) {
+		problems.push(`src/shims/model-roles.ts MODEL_ROLE_IDS: ${diffList(shimTsRoles, upstreamRoles)}`);
+	}
+	if (JSON.stringify(shimTsUnion) !== JSON.stringify(upstreamRoles)) {
+		problems.push(`src/shims/model-roles.ts ModelRole union: ${diffList(shimTsUnion, upstreamRoles)}`);
+	}
+	if (JSON.stringify(shimDtsUnion) !== JSON.stringify(upstreamRoles)) {
+		problems.push(`src/shims/model-roles.d.ts ModelRole union: ${diffList(shimDtsUnion, upstreamRoles)}`);
+	}
+
+	const upstreamHidden = hasHiddenFlag(upstream);
+	const shimTsHidden = hasHiddenFlag(shimTs);
+	const shimDtsHidden = hasHiddenFlag(shimDts);
+	if (shimTsHidden !== upstreamHidden) {
+		problems.push(
+			`src/shims/model-roles.ts RoleInfo.hidden parity mismatch (upstream=${upstreamHidden}, local=${shimTsHidden})`,
+		);
+	}
+	if (shimDtsHidden !== upstreamHidden) {
+		problems.push(
+			`src/shims/model-roles.d.ts RoleInfo.hidden parity mismatch (upstream=${upstreamHidden}, local=${shimDtsHidden})`,
+		);
+	}
+
+	if (problems.length > 0) {
+		throw new Error(`Local model-roles shim is stale versus omp ${ref}:\n- ${problems.join("\n- ")}`);
+	}
+}
+
 async function main(): Promise<void> {
 	const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-head-"));
 	/** `node_modules/@scope/<dir>` entries swapped out, for restore in `finally`. */
@@ -111,6 +191,9 @@ async function main(): Promise<void> {
 			console.log("Frozen install failed (lockfile drift) — retrying with a plain install …");
 			await $`bun install`.cwd(tmp).quiet();
 		}
+
+		console.log("Checking local model-roles shim parity …");
+		await assertModelRoleShimParity(tmp);
 
 		const tsgoBin = path.join(tmp, "node_modules", ".bin", "tsgo");
 		for (const pkg of HOST_PACKAGES) {

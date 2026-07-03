@@ -11,12 +11,23 @@
  * tested without depending on the host's `node_modules`.
  */
 
-export type ModelRole = "default" | "smol" | "slow" | "vision" | "plan" | "designer" | "commit" | "task";
+export type ModelRole =
+	| "default"
+	| "smol"
+	| "slow"
+	| "vision"
+	| "plan"
+	| "designer"
+	| "commit"
+	| "tiny"
+	| "task"
+	| "advisor";
 
 export interface RoleInfo {
 	tag?: string;
 	name: string;
 	color?: string;
+	hidden?: boolean;
 }
 
 export const MODEL_ROLE_IDS: readonly ModelRole[] = [
@@ -27,7 +38,9 @@ export const MODEL_ROLE_IDS: readonly ModelRole[] = [
 	"plan",
 	"designer",
 	"commit",
+	"tiny",
 	"task",
+	"advisor",
 ];
 
 const MODEL_ROLES: Record<ModelRole, RoleInfo> = {
@@ -38,20 +51,23 @@ const MODEL_ROLES: Record<ModelRole, RoleInfo> = {
 	plan: { tag: "PLAN", name: "Architect", color: "muted" },
 	designer: { tag: "DESIGNER", name: "Designer", color: "muted" },
 	commit: { tag: "COMMIT", name: "Commit", color: "dim" },
+	tiny: { tag: "TINY", name: "Tiny", color: "dim" },
 	task: { tag: "TASK", name: "Subtask", color: "muted" },
+	advisor: { tag: "ADVISOR", name: "Advisor", color: "accent" },
 };
 
 export function getRoleInfo(role: string, settings: unknown): RoleInfo {
 	const builtIn = role in MODEL_ROLES ? MODEL_ROLES[role as ModelRole] : undefined;
-	const configured = (settings as { get?: (key: string) => Record<string, { name?: string; color?: string }> })?.get?.(
-		"modelTags",
-	)?.[role];
+	const configured = (
+		settings as { get?: (key: string) => Record<string, { name?: string; color?: string; hidden?: boolean }> }
+	)?.get?.("modelTags")?.[role];
 
 	if (configured) {
 		return {
 			tag: builtIn?.tag,
 			name: configured.name || builtIn?.name || role,
 			color: configured.color || builtIn?.color,
+			hidden: configured.hidden ?? builtIn?.hidden,
 		};
 	}
 

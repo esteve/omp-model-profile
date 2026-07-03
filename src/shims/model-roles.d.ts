@@ -12,7 +12,17 @@
  * type graph.
  */
 declare module "@oh-my-pi/pi-coding-agent/config/model-roles" {
-	type ModelRole = "default" | "smol" | "slow" | "vision" | "plan" | "designer" | "commit" | "task";
+	type ModelRole =
+		| "default"
+		| "smol"
+		| "slow"
+		| "vision"
+		| "plan"
+		| "designer"
+		| "commit"
+		| "tiny"
+		| "task"
+		| "advisor";
 
 	export const MODEL_ROLE_IDS: readonly ModelRole[];
 
@@ -20,6 +30,7 @@ declare module "@oh-my-pi/pi-coding-agent/config/model-roles" {
 		tag?: string;
 		name: string;
 		color?: string;
+		hidden?: boolean;
 	}
 
 	export function getRoleInfo(role: string, settings: unknown): RoleInfo;
