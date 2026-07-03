@@ -25,8 +25,9 @@ omp plugin install github:tlarevo/omp-model-profile
 
 ### Via an omp marketplace (in-app discovery)
 
-Host a catalog from any git repo that contains a `.claude-plugin/marketplace.json`,
-with an entry pointing at this repo:
+Marketplace catalogs are now discovered from **`.omp-plugin/marketplace.json`**
+first, with **`.claude-plugin/marketplace.json`** still supported as a fallback
+for older/shared catalogs. A minimal catalog pointing at this repo looks like:
 
 ```json
 {
@@ -42,15 +43,29 @@ with an entry pointing at this repo:
 }
 ```
 
-Users then run:
+From inside a running omp session, add the marketplace and browse/install via
+the built-in slash commands:
+
+```text
+/marketplace add <owner/repo>
+/marketplace
+/marketplace install model-profile@my-omp-plugins
+```
+
+If you prefer the shell/CLI instead of the in-app browser, the equivalent flow
+is:
 
 ```sh
-omp plugin marketplace add <your-catalog-repo>
+omp plugin marketplace add <owner/repo>
 omp plugin install model-profile@my-omp-plugins
 ```
 
-> npm sources in a marketplace catalog are not yet supported — use the npm
-> command above (`omp plugin install omp-model-profile`) for the npm channel.
+You can also browse explicitly with `/marketplace discover` (or `omp plugin
+discover <marketplace>` in the CLI).
+
+> Marketplace catalogs still cannot install plugins from typed `npm` sources.
+> Use a git-based source in the catalog, or install the npm package directly
+> with `omp plugin install omp-model-profile`.
 
 ### Local development
 
