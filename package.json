@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "omp-model-profile",
-	"version": "0.2.3",
+	"version": "0.2.4",
 	"description": "Named model-role profiles for omp — switch your whole Architect/Default/Subtask model set with /model-profile",
 	"homepage": "https://github.com/tlarevo/omp-model-profile#readme",
 	"repository": {
