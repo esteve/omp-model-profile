@@ -2,7 +2,18 @@
 
 ## [Unreleased]
 
-## [0.2.3] - 2026-07-03
+## [0.2.4] - 2026-07-04
+
+### Changed
+
+- Renamed `/model-profile switch` to the primary activation verb while keeping `/model-profile use` as a compatibility alias, updated completions/status copy for explicit global/project scope selection, and moved profile activation to scope-aware refs so a project can intentionally activate a global profile even when a local profile shadows the same name.
+- Interactive `/model-profile create` and `/model-profile generate` now prompt for **Project** vs **Global** scope when no explicit `--project` / `--global` flag is provided, while headless flows continue to default to the project store for backward-compatible CLI behavior.
+
+### Fixed
+
+- Clearing a project override (`/model-profile switch none`) or deleting the active profile now reloads the effective profile set and immediately applies any global fallback active profile in the current session instead of leaving the runtime unprofiled until the next session.
+- `ProfileStore.writeScope()` now creates missing parent directories before writing, so saving or creating a project-scoped profile works in a fresh checkout before `.omp/` exists.
+- Command completions now treat `--user` / `--scope user` as global-scope aliases consistently with runtime parsing.
 
 ### Changed
 

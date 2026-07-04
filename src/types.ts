@@ -7,8 +7,14 @@
  * once via runtime settings overrides.
  */
 
-/** Where a profile is stored. Project files win over user files by name. */
-export type ProfileScope = "user" | "project";
+/** Where a profile is stored. Project files win by bare-name lookup. */
+export type ProfileScope = "global" | "project";
+
+/** A named profile reference anchored to one storage scope. */
+export interface ProfileRef {
+	name: string;
+	scope: ProfileScope;
+}
 
 /** A single named profile. */
 export interface ModelProfile {
@@ -26,20 +32,31 @@ export interface ModelProfile {
 	taskAgentModelOverrides?: Record<string, string>;
 }
 
+/** One scope's named profile entry, preserved even when another scope shadows it. */
+export interface ScopedProfile extends ProfileRef {
+	profile: ModelProfile;
+}
+
 /** On-disk shape of a single scope's profile file. */
 export interface ProfileFile {
-	/** Name of the active profile in this scope, if any. */
-	active?: string;
+	/** Exact active profile ref for this scope, if any. */
+	active?: ProfileRef;
 	/** Named profiles keyed by profile name. */
 	profiles: Record<string, ModelProfile>;
 }
 
-/** Merged view across user + project scopes (project wins by name). */
+/** Merged view across global + project scopes. */
 export interface EffectiveProfiles {
-	/** Profile name → profile (project entries override user entries). */
+	/** Bare-name lookup where project profiles override global profiles. */
 	profiles: Record<string, ModelProfile>;
-	/** Active profile name (project active wins; falls back to user). */
-	active: string | undefined;
-	/** Scope each surviving profile name came from (for edit/delete targeting). */
-	sources: Record<string, ProfileScope>;
+	/** Global profiles by name. */
+	globalProfiles: Record<string, ModelProfile>;
+	/** Project profiles by name. */
+	projectProfiles: Record<string, ModelProfile>;
+	/** All profiles, one entry per scope/name pair. */
+	entries: ScopedProfile[];
+	/** Exact active profile ref (project wins; falls back to global). */
+	active: ProfileRef | undefined;
+	/** Resolved active profile payload, when the active ref still exists. */
+	activeProfile: ModelProfile | undefined;
 }

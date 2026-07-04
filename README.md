@@ -84,18 +84,19 @@ omp -e path/to/omp-model-profile/src/index.ts
 ## Commands
 
 ```text
-/model-profile                 Open the menu (interactive)
-/model-profile use <name|none> Activate or clear a profile
-/model-profile show <name>     Inspect a profile
-/model-profile create <name>   Build a profile with model pickers
+/model-profile                    Open the menu (interactive)
+/model-profile switch <name|none> Activate a project or global profile, or clear the project override
+/model-profile use <name|none>    Compatibility alias for switch
+/model-profile show <name>        Inspect a profile
+/model-profile create <name>      Build a profile with model pickers
 /model-profile generate [name] <prompt>   Generate a profile with AI
-/model-profile save <name>     Snapshot current role settings
-/model-profile edit <name>     Change one role's model
-/model-profile delete <name>   Remove a profile
-/model-profile list            List all profiles
+/model-profile save <name>        Snapshot current role settings
+/model-profile edit <name>        Change one role's model
+/model-profile delete <name>      Remove a profile
+/model-profile list               List all profiles
 ```
 
-Writes default to the project file. Add `--scope user`, `--user`, or `--project` to target a scope.
+Writes default to the project file. Add `--scope global`, `--global`, or `--project` to target a storage scope (`--user` remains accepted as a compatibility alias for `--global`).
 
 ### Generate with AI
 
@@ -120,19 +121,19 @@ Project profiles live at:
 <cwd>/.omp/model-profiles.json
 ```
 
-User profiles live at:
+Global profiles live at:
 
 ```text
 ~/.omp/agent/model-profiles.json
 ```
 
-Effective profiles are merged as `{ ...user.profiles, ...project.profiles }`, so project profiles win by name. The active pointer prefers the project file, then the user file.
+Effective profiles are merged as `{ ...global.profiles, ...project.profiles }`, so project profiles win by bare name. Activation is scope-aware: the project file can explicitly point at either a project profile or a global profile, so project-local defaults still win unless you switch to a global profile on purpose.
 
 ## JSON format
 
 ```json
 {
-  "active": "deep-review",
+  "active": { "name": "deep-review", "scope": "project" },
   "profiles": {
     "deep-review": {
       "description": "High-quality planning/review",
@@ -150,6 +151,8 @@ Effective profiles are merged as `{ ...user.profiles, ...project.profiles }`, so
   }
 }
 ```
+
+Legacy `"active": "name"` strings are still read and are interpreted as “this scope's own profile”; subsequent writes upgrade them to the object form above.
 
 Thinking suffixes (`:minimal`, `:low`, `:medium`, `:high`, `:xhigh`, `:off`, `:auto`) are preserved in role settings. On activation, the **`default`** role's suffix is applied to the live session — including `:auto`, which keeps per-prompt adaptive thinking (low–xhigh). A `default` with no suffix leaves the current thinking selector untouched. Other roles keep their concrete suffixes for subagents/pickers via omp's resolver; `auto` is offered only for the `default` role since it is a session-level selector.
 

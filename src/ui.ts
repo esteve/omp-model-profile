@@ -2,7 +2,7 @@
  * Interactive flows and the `/model-profile` command dispatcher.
  *
  * Every picker is gated on `ctx.hasUI`; with explicit arguments the
- * non-interactive verbs (`use`, `show`, `delete`, `list`) work headless.
+ * non-interactive verbs (`switch`, `show`, `delete`, `list`) work headless.
  * Pickers are Level-1 `ctx.ui.select` menus — no model names are ever typed.
  */
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
@@ -11,10 +11,15 @@ import { type ProfileModel, resolveCanonicalFromRegistry, resolveCompatibleModel
 import { type GenerateSpec, generateProfile } from "./generate";
 import { applyProfile, clearProfile } from "./runtime";
 import type { ProfileStore } from "./store";
-import type { EffectiveProfiles, ModelProfile, ProfileScope } from "./types";
+import type { EffectiveProfiles, ModelProfile, ProfileRef, ProfileScope } from "./types";
 
 type SelectOption = { label: string; description?: string };
 type ModelPick = ProfileModel | "skip" | "cancel";
+type ProfileSelection = ProfileRef | "none";
+interface ResolvedProfile {
+	ref: ProfileRef;
+	profile: ModelProfile;
+}
 
 const THINKING_OPTIONS: readonly string[] = ["default", "auto", "minimal", "low", "medium", "high", "xhigh"];
 const NAME_PATTERN = /^[\w.-]+$/;
@@ -34,14 +39,17 @@ function parseArgs(args: string): ParsedArgs {
 	const positional: string[] = [];
 	for (let i = 0; i < tokens.length; i++) {
 		const token = tokens[i];
-		if (token === "--user") {
-			scope = "user";
+		if (token === "--user" || token === "--global") {
+			scope = "global";
 		} else if (token === "--project") {
 			scope = "project";
 		} else if (token === "--scope") {
 			const next = tokens[i + 1]?.toLowerCase();
-			if (next === "user" || next === "project") {
-				scope = next;
+			if (next === "user" || next === "global") {
+				scope = "global";
+				i++;
+			} else if (next === "project") {
+				scope = "project";
 				i++;
 			}
 		} else {
@@ -68,6 +76,37 @@ function isModelAvailable(ctx: ExtensionContext, value: string, available: reado
 		resolveCompatibleModelString(value, available, id => resolveCanonicalFromRegistry(ctx.modelRegistry, id)) !==
 		undefined
 	);
+}
+
+function scopeProfiles(effective: EffectiveProfiles, scope: ProfileScope): Record<string, ModelProfile> {
+	return scope === "global" ? effective.globalProfiles : effective.projectProfiles;
+}
+
+function refsEqual(a: ProfileRef | undefined, b: ProfileRef | undefined): boolean {
+	return a?.name === b?.name && a?.scope === b?.scope;
+}
+
+function compareRefs(a: ProfileRef, b: ProfileRef): number {
+	return a.name.localeCompare(b.name) || (a.scope === b.scope ? 0 : a.scope === "project" ? -1 : 1);
+}
+
+function formatProfileLabel(ref: ProfileRef): string {
+	return `${ref.name} [${ref.scope}]`;
+}
+
+function resolveProfile(
+	effective: EffectiveProfiles,
+	name: string,
+	scope: ProfileScope | undefined,
+): ResolvedProfile | undefined {
+	if (scope) {
+		const profile = scopeProfiles(effective, scope)[name];
+		return profile ? { ref: { name, scope }, profile } : undefined;
+	}
+	const project = effective.projectProfiles[name];
+	if (project) return { ref: { name, scope: "project" }, profile: project };
+	const global = effective.globalProfiles[name];
+	return global ? { ref: { name, scope: "global" }, profile: global } : undefined;
 }
 
 /** Coerce a free-form name into a valid profile name, or undefined if none survives. */
@@ -104,29 +143,51 @@ async function pickProfile(
 	ctx: ExtensionContext,
 	effective: EffectiveProfiles,
 	opts: { allowNone?: boolean; preselectActive?: boolean },
-): Promise<string | undefined> {
-	const names = Object.keys(effective.profiles).sort();
-	if (names.length === 0 && !opts.allowNone) {
+): Promise<ProfileSelection | undefined> {
+	const entries = [...effective.entries].sort((a, b) => compareRefs(a, b));
+	if (entries.length === 0 && !opts.allowNone) {
 		ctx.ui.notify("No model profiles defined yet. Create one with /model-profile create <name>.", "info");
 		return undefined;
 	}
 
+	const byLabel = new Map<string, ProfileRef>();
 	const options: SelectOption[] = [];
-	if (opts.allowNone) options.push({ label: "none", description: "Clear the active profile" });
-	for (const name of names) {
-		const profile = effective.profiles[name];
-		const active = effective.active === name ? " (active)" : "";
-		const desc = profile.description ? ` — ${profile.description}` : "";
-		options.push({ label: name, description: `${effective.sources[name]}${desc}${active}` });
+	if (opts.allowNone) options.push({ label: "none", description: "Clear the active project override" });
+	for (const entry of entries) {
+		const active = refsEqual(effective.active, entry) ? " (active)" : "";
+		const desc = entry.profile.description ? ` — ${entry.profile.description}` : "";
+		const label = formatProfileLabel(entry);
+		byLabel.set(label, { name: entry.name, scope: entry.scope });
+		options.push({ label, description: `${entry.scope}${desc}${active}` });
 	}
 
 	let initialIndex = 0;
 	if (opts.preselectActive && effective.active) {
-		const idx = options.findIndex(option => option.label === effective.active);
+		const idx = options.findIndex(option => option.label === formatProfileLabel(effective.active as ProfileRef));
 		if (idx >= 0) initialIndex = idx;
 	}
 
-	return ctx.ui.select("Select a profile", options, { initialIndex, selectionMarker: "radio" });
+	const chosen = await ctx.ui.select("Select a profile", options, { initialIndex, selectionMarker: "radio" });
+	if (!chosen) return undefined;
+	return chosen === "none" ? "none" : byLabel.get(chosen);
+}
+
+export async function pickWriteScope(
+	ctx: Pick<ExtensionContext, "hasUI" | "ui">,
+	explicitScope: ProfileScope | undefined,
+	mode: "create" | "generate",
+): Promise<ProfileScope | undefined> {
+	if (explicitScope) return explicitScope;
+	if (!ctx.hasUI) return "project";
+	const chosen = await ctx.ui.select(
+		mode === "generate" ? "Where should the generated profile live?" : "Where should this profile live?",
+		[
+			{ label: "Project", description: "Stored in .omp/model-profiles.json" },
+			{ label: "Global", description: "Stored in ~/.omp/agent/model-profiles.json" },
+		],
+		{ initialIndex: 0, selectionMarker: "radio" },
+	);
+	return chosen === "Global" ? "global" : chosen === "Project" ? "project" : undefined;
 }
 
 async function pickRole(pi: ExtensionAPI, ctx: ExtensionContext, profile: ModelProfile): Promise<string | undefined> {
@@ -210,29 +271,24 @@ async function pickThinking(ctx: ExtensionContext, roleName: string, allowAuto: 
 // ───────────────────────────────────────────────────────────────────────────
 
 function listProfiles(ctx: ExtensionContext, effective: EffectiveProfiles): void {
-	const names = Object.keys(effective.profiles).sort();
-	if (names.length === 0) {
+	const entries = [...effective.entries].sort((a, b) => compareRefs(a, b));
+	if (entries.length === 0) {
 		ctx.ui.notify("No model profiles defined. Create one with /model-profile create <name>.", "info");
 		return;
 	}
 	const lines = ["Model profiles:"];
-	for (const name of names) {
-		const profile = effective.profiles[name];
-		const marker = effective.active === name ? "●" : " ";
-		const desc = profile.description ? ` — ${profile.description}` : "";
-		lines.push(`  ${marker} ${name} [${effective.sources[name]}]${desc}`);
+	for (const entry of entries) {
+		const marker = refsEqual(effective.active, entry) ? "●" : " ";
+		const desc = entry.profile.description ? ` — ${entry.profile.description}` : "";
+		lines.push(`  ${marker} ${entry.name} [${entry.scope}]${desc}`);
 	}
 	ctx.ui.notify(lines.join("\n"), "info");
 }
 
-function showProfile(pi: ExtensionAPI, ctx: ExtensionContext, effective: EffectiveProfiles, name: string): void {
-	const profile = effective.profiles[name];
-	if (!profile) {
-		ctx.ui.notify(`Profile "${name}" not found.`, "error");
-		return;
-	}
+function showProfile(pi: ExtensionAPI, ctx: ExtensionContext, selected: ResolvedProfile): void {
+	const { ref, profile } = selected;
 	const available = ctx.modelRegistry.getAvailable();
-	const lines = [`Profile "${name}" [${effective.sources[name]}]`];
+	const lines = [`Profile "${ref.name}" [${ref.scope}]`];
 	if (profile.description) lines.push(profile.description);
 	lines.push("");
 
@@ -258,44 +314,69 @@ function showProfile(pi: ExtensionAPI, ctx: ExtensionContext, effective: Effecti
 	ctx.ui.notify(lines.join("\n"), "info");
 }
 
+async function applyCurrentEffectiveProfile(
+	pi: ExtensionAPI,
+	ctx: ExtensionCommandContext,
+	effective: EffectiveProfiles,
+): Promise<void> {
+	if (effective.active && effective.activeProfile) {
+		await applyProfile(pi, ctx, effective.active.name, effective.activeProfile);
+		return;
+	}
+	await clearProfile(pi, ctx);
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // Verbs
 // ───────────────────────────────────────────────────────────────────────────
 
-async function verbUse(
+async function verbSwitch(
 	pi: ExtensionAPI,
 	ctx: ExtensionCommandContext,
 	store: ProfileStore,
 	effective: EffectiveProfiles,
+	command: "switch" | "use",
 	name: string | undefined,
 	scope: ProfileScope | undefined,
 ): Promise<void> {
-	let target = name;
-	if (!target) {
+	let target: ProfileSelection | undefined;
+	if (!name) {
 		if (!ctx.hasUI) {
-			ctx.ui.notify("Usage: /model-profile use <name|none>", "error");
+			ctx.ui.notify(`Usage: /model-profile ${command} <name|none>`, "error");
 			return;
 		}
 		target = await pickProfile(ctx, effective, { allowNone: true, preselectActive: true });
 		if (target === undefined) return;
+	} else if (name === "none") {
+		target = "none";
+	} else {
+		target = resolveProfile(effective, name, scope)?.ref;
 	}
 
-	const writeScope = scope ?? "project";
 	if (target === "none") {
-		await store.setActive(writeScope, undefined);
-		await clearProfile(pi, ctx);
-		ctx.ui.notify("Model profile cleared.", "info");
+		await store.setActive("project", undefined);
+		const next = await store.loadEffective();
+		await applyCurrentEffectiveProfile(pi, ctx, next);
+		if (next.active) {
+			ctx.ui.notify(`Switched to profile "${next.active.name}" [${next.active.scope}].`, "info");
+		} else {
+			ctx.ui.notify("Model profile cleared.", "info");
+		}
+		return;
+	}
+	if (!target) {
+		ctx.ui.notify(`Profile "${name}"${scope ? ` not found in ${scope}` : " not found"}.`, "error");
 		return;
 	}
 
-	const profile = effective.profiles[target];
-	if (!profile) {
-		ctx.ui.notify(`Profile "${target}" not found.`, "error");
+	const selected = resolveProfile(effective, target.name, target.scope);
+	if (!selected) {
+		ctx.ui.notify(`Profile "${target.name}" not found in ${target.scope}.`, "error");
 		return;
 	}
-	await store.setActive(writeScope, target);
-	await applyProfile(pi, ctx, target, profile);
-	ctx.ui.notify(`Switched to profile "${target}".`, "info");
+	await store.setActive("project", selected.ref);
+	await applyProfile(pi, ctx, selected.ref.name, selected.profile);
+	ctx.ui.notify(`Switched to profile "${selected.ref.name}" [${selected.ref.scope}].`, "info");
 }
 
 async function verbCreate(
@@ -306,7 +387,8 @@ async function verbCreate(
 	name: string | undefined,
 	scope: ProfileScope | undefined,
 ): Promise<void> {
-	const writeScope = scope ?? "project";
+	const writeScope = await pickWriteScope(ctx, scope, "create");
+	if (!writeScope) return;
 	let target = name;
 	if (!target) {
 		if (!ctx.hasUI) {
@@ -324,13 +406,18 @@ async function verbCreate(
 	if (!ctx.hasUI) {
 		await store.saveProfile(writeScope, target, { modelRoles: {} });
 		ctx.ui.notify(
-			`Created empty profile "${target}" (${writeScope}). Edit it interactively with /model-profile edit ${target}.`,
+			`Created empty profile "${target}" [${writeScope}]. Edit it interactively with /model-profile edit ${target}.`,
 			"info",
 		);
 		return;
 	}
 
-	if (effective.profiles[target] && !(await ctx.ui.confirm("Profile exists", `Overwrite "${target}"?`))) return;
+	if (
+		scopeProfiles(effective, writeScope)[target] &&
+		!(await ctx.ui.confirm("Profile exists", `Overwrite "${target}" in ${writeScope}?`))
+	) {
+		return;
+	}
 
 	const available = ctx.modelRegistry.getAvailable();
 	const modelRoles: Record<string, string> = {};
@@ -350,11 +437,11 @@ async function verbCreate(
 	if (description) profile.description = description;
 
 	await store.saveProfile(writeScope, target, profile);
-	if (await ctx.ui.confirm("Activate?", `Use profile "${target}" now?`)) {
-		await store.setActive(writeScope, target);
+	if (await ctx.ui.confirm("Activate?", `Switch to "${target}" [${writeScope}] now?`)) {
+		await store.setActive("project", { name: target, scope: writeScope });
 		await applyProfile(pi, ctx, target, profile);
 	}
-	ctx.ui.notify(`Saved profile "${target}" (${writeScope}).`, "info");
+	ctx.ui.notify(`Saved profile "${target}" [${writeScope}].`, "info");
 }
 
 async function verbSave(
@@ -392,11 +479,11 @@ async function verbSave(
 	if (cycleOrder.length) profile.cycleOrder = [...cycleOrder];
 	const taskOverrides = s.get("task.agentModelOverrides");
 	if (taskOverrides && Object.keys(taskOverrides).length) profile.taskAgentModelOverrides = { ...taskOverrides };
-	const existing = effective.profiles[target];
+	const existing = scopeProfiles(effective, writeScope)[target];
 	if (existing?.description) profile.description = existing.description;
 
 	await store.saveProfile(writeScope, target, profile);
-	ctx.ui.notify(`Saved current models as profile "${target}" (${writeScope}).`, "info");
+	ctx.ui.notify(`Saved current models as profile "${target}" [${writeScope}].`, "info");
 }
 
 async function verbEdit(
@@ -411,24 +498,27 @@ async function verbEdit(
 		ctx.ui.notify("Editing requires interactive UI.", "error");
 		return;
 	}
-	let target = name;
-	if (!target) {
-		target = await pickProfile(ctx, effective, {});
-		if (!target) return;
+
+	let selected: ResolvedProfile | undefined;
+	if (!name) {
+		const picked = await pickProfile(ctx, effective, {});
+		if (!picked || picked === "none") return;
+		selected = resolveProfile(effective, picked.name, picked.scope);
+	} else {
+		selected = resolveProfile(effective, name, scope);
 	}
-	const profile = effective.profiles[target];
-	if (!profile) {
-		ctx.ui.notify(`Profile "${target}" not found.`, "error");
+	if (!selected) {
+		ctx.ui.notify(`Profile "${name}"${scope ? ` not found in ${scope}` : " not found"}.`, "error");
 		return;
 	}
 
-	const role = await pickRole(pi, ctx, profile);
+	const role = await pickRole(pi, ctx, selected.profile);
 	if (!role) return;
 	const available = ctx.modelRegistry.getAvailable();
 	const pick = await pickModel(ctx, available, `Model for ${roleLabel(pi, role)} (${role})`);
 	if (pick === "cancel") return;
 
-	const updated: ModelProfile = { ...profile, modelRoles: { ...profile.modelRoles } };
+	const updated: ModelProfile = { ...selected.profile, modelRoles: { ...selected.profile.modelRoles } };
 	if (pick === "skip") {
 		delete updated.modelRoles[role];
 	} else {
@@ -438,10 +528,9 @@ async function verbEdit(
 		updated.modelRoles[role] = value;
 	}
 
-	const targetScope = scope ?? effective.sources[target] ?? "project";
-	await store.saveProfile(targetScope, target, updated);
-	if (effective.active === target) await applyProfile(pi, ctx, target, updated);
-	ctx.ui.notify(`Updated "${target}" → ${role}.`, "info");
+	await store.saveProfile(selected.ref.scope, selected.ref.name, updated);
+	if (refsEqual(effective.active, selected.ref)) await applyProfile(pi, ctx, selected.ref.name, updated);
+	ctx.ui.notify(`Updated "${selected.ref.name}" [${selected.ref.scope}] → ${role}.`, "info");
 }
 
 async function verbGenerate(
@@ -457,7 +546,8 @@ async function verbGenerate(
 		ctx.ui.notify("Generate requires interactive UI. Usage: /model-profile generate [name] <prompt>", "error");
 		return;
 	}
-	const writeScope = scope ?? "project";
+	const writeScope = await pickWriteScope(ctx, scope, "generate");
+	if (!writeScope) return;
 
 	// Name is optional — a blank name lets the model propose one.
 	let target = name?.trim() || undefined;
@@ -471,7 +561,11 @@ async function verbGenerate(
 		ctx.ui.notify(`Invalid profile name "${target}" (use letters, digits, ".", "-", "_").`, "error");
 		return;
 	}
-	if (target && effective.profiles[target] && !(await ctx.ui.confirm("Profile exists", `Overwrite "${target}"?`))) {
+	if (
+		target &&
+		scopeProfiles(effective, writeScope)[target] &&
+		!(await ctx.ui.confirm("Profile exists", `Overwrite "${target}" in ${writeScope}?`))
+	) {
 		return;
 	}
 
@@ -545,25 +639,30 @@ async function verbGenerate(
 			ctx.ui.notify("No valid profile name — aborting.", "error");
 			return;
 		}
-		if (effective.profiles[finalName] && !(await ctx.ui.confirm("Profile exists", `Overwrite "${finalName}"?`))) {
+		if (
+			scopeProfiles(effective, writeScope)[finalName] &&
+			!(await ctx.ui.confirm("Profile exists", `Overwrite "${finalName}" in ${writeScope}?`))
+		) {
 			return;
 		}
 	}
 
 	await store.saveProfile(writeScope, finalName, profile);
 	let view = await store.loadEffective();
-	showProfile(pi, ctx, view, finalName);
+	const saved = resolveProfile(view, finalName, writeScope);
+	if (saved) showProfile(pi, ctx, saved);
 
-	while (await ctx.ui.confirm("Refine?", `Edit a role in "${finalName}" before activating?`)) {
+	while (await ctx.ui.confirm("Refine?", `Edit a role in "${finalName}" [${writeScope}] before activating?`)) {
 		await verbEdit(pi, ctx, store, view, finalName, writeScope);
 		view = await store.loadEffective();
 	}
 
-	if (await ctx.ui.confirm("Activate?", `Use profile "${finalName}" now?`)) {
-		await store.setActive(writeScope, finalName);
-		await applyProfile(pi, ctx, finalName, view.profiles[finalName] ?? profile);
+	if (await ctx.ui.confirm("Activate?", `Switch to "${finalName}" [${writeScope}] now?`)) {
+		await store.setActive("project", { name: finalName, scope: writeScope });
+		const selected = resolveProfile(view, finalName, writeScope);
+		if (selected) await applyProfile(pi, ctx, finalName, selected.profile);
 	}
-	ctx.ui.notify(`Saved profile "${finalName}" (${writeScope}).`, "info");
+	ctx.ui.notify(`Saved profile "${finalName}" [${writeScope}].`, "info");
 }
 
 async function verbDelete(
@@ -574,26 +673,41 @@ async function verbDelete(
 	name: string | undefined,
 	scope: ProfileScope | undefined,
 ): Promise<void> {
-	let target = name;
-	if (!target) {
+	let selected: ResolvedProfile | undefined;
+	if (!name) {
 		if (!ctx.hasUI) {
 			ctx.ui.notify("Usage: /model-profile delete <name>", "error");
 			return;
 		}
-		target = await pickProfile(ctx, effective, {});
-		if (!target) return;
+		const picked = await pickProfile(ctx, effective, {});
+		if (!picked || picked === "none") return;
+		selected = resolveProfile(effective, picked.name, picked.scope);
+	} else {
+		selected = resolveProfile(effective, name, scope);
 	}
-	if (!effective.profiles[target]) {
-		ctx.ui.notify(`Profile "${target}" not found.`, "error");
+	if (!selected) {
+		ctx.ui.notify(`Profile "${name}"${scope ? ` not found in ${scope}` : " not found"}.`, "error");
 		return;
 	}
-	if (ctx.hasUI && !(await ctx.ui.confirm("Delete profile", `Delete "${target}"? This cannot be undone.`))) return;
+	if (
+		ctx.hasUI &&
+		!(await ctx.ui.confirm(
+			"Delete profile",
+			`Delete "${selected.ref.name}" [${selected.ref.scope}]? This cannot be undone.`,
+		))
+	) {
+		return;
+	}
 
-	const targetScope = scope ?? effective.sources[target] ?? "project";
-	const removed = await store.deleteProfile(targetScope, target);
-	if (effective.active === target) await clearProfile(pi, ctx);
+	const removed = await store.deleteProfile(selected.ref.scope, selected.ref.name);
+	if (refsEqual(effective.active, selected.ref)) {
+		const next = await store.loadEffective();
+		await applyCurrentEffectiveProfile(pi, ctx, next);
+	}
 	ctx.ui.notify(
-		removed ? `Deleted profile "${target}".` : `Profile "${target}" not found in ${targetScope} scope.`,
+		removed
+			? `Deleted profile "${selected.ref.name}" [${selected.ref.scope}].`
+			: `Profile "${selected.ref.name}" not found in ${selected.ref.scope}.`,
 		removed ? "info" : "warning",
 	);
 }
@@ -609,7 +723,7 @@ async function menuRoot(
 		return;
 	}
 	const action = await ctx.ui.select("Model Profiles", [
-		{ label: "Use", description: "Switch the active profile" },
+		{ label: "Switch", description: "Activate a project or global profile" },
 		{ label: "Create", description: "Build a new profile" },
 		{ label: "Generate (AI)", description: "Describe a profile; AI assigns models" },
 		{ label: "Edit", description: "Change a role's model" },
@@ -619,8 +733,8 @@ async function menuRoot(
 		{ label: "List", description: "List all profiles" },
 	]);
 	switch (action) {
-		case "Use":
-			return verbUse(pi, ctx, store, effective, undefined, undefined);
+		case "Switch":
+			return verbSwitch(pi, ctx, store, effective, "switch", undefined, undefined);
 		case "Create":
 			return verbCreate(pi, ctx, store, effective, undefined, undefined);
 		case "Generate (AI)":
@@ -630,8 +744,10 @@ async function menuRoot(
 		case "Save current":
 			return verbSave(pi, ctx, store, effective, undefined, undefined);
 		case "Show": {
-			const name = await pickProfile(ctx, effective, {});
-			if (name) showProfile(pi, ctx, effective, name);
+			const picked = await pickProfile(ctx, effective, {});
+			if (!picked || picked === "none") return;
+			const selected = resolveProfile(effective, picked.name, picked.scope);
+			if (selected) showProfile(pi, ctx, selected);
 			return;
 		}
 		case "Delete":
@@ -646,17 +762,18 @@ async function menuRoot(
 const USAGE = [
 	"Model Profiles — switch your whole role-set at once.",
 	"",
-	"  /model-profile                 Open the menu (interactive)",
-	"  /model-profile use <name|none> Activate or clear a profile",
-	"  /model-profile show <name>     Inspect a profile",
-	"  /model-profile create <name>   Build a profile (pick models)",
+	"  /model-profile                   Open the menu (interactive)",
+	"  /model-profile switch <name|none> Activate or clear the project override",
+	"  /model-profile use <name|none>    Compatibility alias for switch",
+	"  /model-profile show <name>        Inspect a profile",
+	"  /model-profile create <name>      Build a profile (pick models)",
 	"  /model-profile generate [name] <prompt>  Generate a profile with AI",
-	"  /model-profile save <name>     Snapshot current models",
-	"  /model-profile edit <name>     Change a role's model",
-	"  /model-profile delete <name>   Remove a profile",
-	"  /model-profile list            List all profiles",
+	"  /model-profile save <name>        Snapshot current models",
+	"  /model-profile edit <name>        Change a role's model",
+	"  /model-profile delete <name>      Remove a profile",
+	"  /model-profile list               List all profiles",
 	"",
-	"  Add --scope user (or --user / --project) to target a scope.",
+	"  Add --scope global (or --global / --project) to target a storage scope.",
 ].join("\n");
 
 /** Dispatch `/model-profile <args>`. Returns the post-mutation effective view. */
@@ -673,15 +790,23 @@ export async function handleProfileCommand(
 		case "":
 			await menuRoot(pi, ctx, store, effective);
 			break;
+		case "switch":
+			await verbSwitch(pi, ctx, store, effective, "switch", name, scope);
+			break;
 		case "use":
-			await verbUse(pi, ctx, store, effective, name, scope);
+			await verbSwitch(pi, ctx, store, effective, "use", name, scope);
 			break;
 		case "show":
 			if (name) {
-				showProfile(pi, ctx, effective, name);
+				const selected = resolveProfile(effective, name, scope);
+				if (selected) showProfile(pi, ctx, selected);
+				else ctx.ui.notify(`Profile "${name}"${scope ? ` not found in ${scope}` : " not found"}.`, "error");
 			} else if (ctx.hasUI) {
 				const picked = await pickProfile(ctx, effective, {});
-				if (picked) showProfile(pi, ctx, effective, picked);
+				if (picked && picked !== "none") {
+					const selected = resolveProfile(effective, picked.name, picked.scope);
+					if (selected) showProfile(pi, ctx, selected);
+				}
 			} else {
 				listProfiles(ctx, effective);
 			}

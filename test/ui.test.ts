@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { getRoleInfo, MODEL_ROLE_IDS } from "../src/shims/model-roles";
-import { pickModel, slugifyName } from "../src/ui";
+import { pickModel, pickWriteScope, slugifyName } from "../src/ui";
 import { testModel } from "./fixtures";
 
 type SelectOptionInput = string | { label: string; description?: string };
@@ -128,6 +128,42 @@ describe("slugifyName", () => {
 		expect(slugifyName("")).toBeUndefined();
 		expect(slugifyName(undefined)).toBeUndefined();
 		expect(slugifyName("###")).toBeUndefined();
+	});
+});
+
+describe("pickWriteScope", () => {
+	test("defaults headless flows to project scope", async () => {
+		const { ctx, calls } = makeCtx([]);
+		(ctx as { hasUI?: boolean }).hasUI = false;
+		expect(await pickWriteScope(ctx, undefined, "create")).toBe("project");
+		expect(calls).toHaveLength(0);
+	});
+
+	test("prompts interactive create flows when no scope is specified", async () => {
+		const { ctx, calls } = makeCtx([{ pick: "Global" }]);
+		(ctx as { hasUI?: boolean }).hasUI = true;
+		expect(await pickWriteScope(ctx, undefined, "create")).toBe("global");
+		expect(calls[0]).toMatchObject({
+			title: "Where should this profile live?",
+			options: [
+				{ label: "Project", description: "Stored in .omp/model-profiles.json" },
+				{ label: "Global", description: "Stored in ~/.omp/agent/model-profiles.json" },
+			],
+		});
+	});
+
+	test("prompts interactive generate flows when no scope is specified", async () => {
+		const { ctx, calls } = makeCtx([{ pick: "Project" }]);
+		(ctx as { hasUI?: boolean }).hasUI = true;
+		expect(await pickWriteScope(ctx, undefined, "generate")).toBe("project");
+		expect(calls[0]?.title).toBe("Where should the generated profile live?");
+	});
+
+	test("respects an explicit scope without prompting", async () => {
+		const { ctx, calls } = makeCtx([{ pick: "Global" }]);
+		(ctx as { hasUI?: boolean }).hasUI = true;
+		expect(await pickWriteScope(ctx, "global", "create")).toBe("global");
+		expect(calls).toHaveLength(0);
 	});
 });
 
