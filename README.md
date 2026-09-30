@@ -158,10 +158,10 @@ Thinking suffixes (`:minimal`, `:low`, `:medium`, `:high`, `:xhigh`, `:off`, `:a
 
 ## Compatibility
 
-Requires omp host `@oh-my-pi/pi-coding-agent >= 15.10.11` (for the
-`config/model-roles` subpath export) and `@oh-my-pi/pi-ai >= 15`.
+Requires omp host `@oh-my-pi/pi-coding-agent >= 18.3.1` (for
+`config/registry.lookup`) and `@oh-my-pi/pi-ai >= 18.3.1`.
 
-Last verified against omp **v16.3.4** (2026-07-03) via `bun run check:omp-head`,
+Last verified against omp **v18.3.2** (2026-09-30) via `bun run check:omp-head`,
 which typechecks this plugin against the current omp source.
 
 ## Releasing

@@ -9,6 +9,7 @@
  *   alone do not.
  */
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import {
 	mapProfileToOverrides,
 	resolveCanonicalFromRegistry,
@@ -22,6 +23,12 @@ const STATUS_KEY = "model-profile";
 const ROLES_KEY = "modelRoles" as const;
 const CYCLE_KEY = "cycleOrder" as const;
 const TASK_KEY = "task.agentModelOverrides" as const;
+
+function setting(id: string) {
+	const result = lookup(id);
+	if (!result) throw new Error(`Unknown OMP setting: ${id}`);
+	return result;
+}
 
 /**
  * Surface the active profile in the host UI. Prefers the powerline status-line
@@ -41,9 +48,9 @@ function setProfileStatus(ctx: ExtensionContext, text: string | undefined): void
 /** Drop every override this extension manages, returning to base settings. */
 function clearOverrides(pi: ExtensionAPI): void {
 	const s = pi.pi.settings;
-	s.clearOverride(ROLES_KEY);
-	s.clearOverride(CYCLE_KEY);
-	s.clearOverride(TASK_KEY);
+	setting(ROLES_KEY).clearOverride(s);
+	setting(CYCLE_KEY).clearOverride(s);
+	setting(TASK_KEY).clearOverride(s);
 }
 
 /** Resolve a role pattern to a live, available model (canonical fallback). */
@@ -88,8 +95,8 @@ export async function applyProfile(
 
 	const overrides = mapProfileToOverrides(profile);
 	s.overrideModelRoles(overrides.modelRoles);
-	if (overrides.cycleOrder) s.override(CYCLE_KEY, overrides.cycleOrder);
-	if (overrides.taskAgentModelOverrides) s.override(TASK_KEY, overrides.taskAgentModelOverrides);
+	if (overrides.cycleOrder) setting(CYCLE_KEY).override(s, overrides.cycleOrder);
+	if (overrides.taskAgentModelOverrides) setting(TASK_KEY).override(s, overrides.taskAgentModelOverrides);
 
 	const defaultPattern = s.getModelRole("default");
 	if (defaultPattern) {

@@ -7,6 +7,7 @@
  */
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { getRoleInfo, MODEL_ROLE_IDS } from "@oh-my-pi/pi-coding-agent/config/model-roles";
+import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { type ProfileModel, resolveCanonicalFromRegistry, resolveCompatibleModelString } from "./apply";
 import { type GenerateSpec, generateProfile } from "./generate";
 import { applyProfile, clearProfile } from "./runtime";
@@ -475,10 +476,12 @@ async function verbSave(
 	}
 
 	const profile: ModelProfile = { modelRoles };
-	const cycleOrder = s.get("cycleOrder");
-	if (cycleOrder.length) profile.cycleOrder = [...cycleOrder];
-	const taskOverrides = s.get("task.agentModelOverrides");
-	if (taskOverrides && Object.keys(taskOverrides).length) profile.taskAgentModelOverrides = { ...taskOverrides };
+	const cycleOrder = lookup("cycleOrder")?.get(s);
+	if (Array.isArray(cycleOrder) && cycleOrder.every(value => typeof value === "string"))
+		profile.cycleOrder = cycleOrder;
+	const taskOverrides = lookup("task.agentModelOverrides")?.get(s);
+	if (taskOverrides && typeof taskOverrides === "object" && !Array.isArray(taskOverrides))
+		profile.taskAgentModelOverrides = { ...taskOverrides } as Record<string, string>;
 	const existing = scopeProfiles(effective, writeScope)[target];
 	if (existing?.description) profile.description = existing.description;
 
